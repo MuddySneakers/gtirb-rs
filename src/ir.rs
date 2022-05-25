@@ -3,12 +3,12 @@ use crate::*;
 pub struct IR {
     uuid: Uuid,
     version: u32,
-    pub(crate) modules: Vec<module::ModuleData>,
-    pub(crate) sections: Vec<section::SectionData>,
-    pub(crate) byte_intervals: Vec<byte_interval::ByteIntervalData>,
-    pub(crate) code_blocks: Vec<code_block::CodeBlockData>,
-    pub(crate) data_blocks: Vec<data_block::DataBlockData>,
-    pub(crate) sym_exprs: Vec<symbolic_expression::SymbolicExpressionData>,
+    modules: Vec<Option<module::ModuleData>>,
+    sections: Vec<Option<section::SectionData>>,
+    byte_intervals: Vec<Option<byte_interval::ByteIntervalData>>,
+    code_blocks: Vec<Option<code_block::CodeBlockData>>,
+    data_blocks: Vec<Option<data_block::DataBlockData>>,
+    sym_exprs: Vec<Option<symbolic_expression::SymbolicExpressionData>>,
 }
 
 impl IR {
@@ -27,7 +27,29 @@ impl IR {
 
     pub fn add_module(&mut self, name: &str) -> module::Module {
         let key = self.modules.len();
-        self.modules.push(module::ModuleData::new(name));
+        self.modules.push(Some(module::ModuleData::new(name)));
         module::Module::new(key)
+    }
+
+    pub(crate) fn get_module_data(&self, module: &module::Module) -> &module::ModuleData {
+        self.modules[module.key].as_ref().expect("Attempt to access deleted Module!")
+    }
+
+    pub(crate) fn get_module_data_mut(&mut self, module: &module::Module) -> &mut module::ModuleData {
+        self.modules[module.key].as_mut().expect("Attempt to access deleted Module!")
+    }
+
+    pub(crate) fn get_byte_interval_data(&self, bi: &byte_interval::ByteInterval) -> &byte_interval::ByteIntervalData {
+        self.byte_intervals[bi.key].as_ref().expect("Attempt to access deleted ByteInterval!")
+    }
+
+    pub(crate) fn get_code_block_data(&self, cb: &code_block::CodeBlock) -> &code_block::CodeBlockData {
+        self.code_blocks[cb.key].as_ref().expect("Attempt to access deleted CodeBlock!")
+    }
+
+    pub fn add_section(&mut self) -> section::Section {
+        let key = self.sections.len();
+        self.sections.push(Some(section::SectionData::new()));
+        section::Section::new(key)
     }
 }

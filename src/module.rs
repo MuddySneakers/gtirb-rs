@@ -19,8 +19,9 @@ impl ModuleData {
     }
 }
 
+#[derive(Clone, Copy)]
 pub struct Module {
-    key: usize,
+    pub(crate) key: usize,
 }
 
 impl Module {
@@ -32,16 +33,16 @@ impl Module {
     }
 
     pub fn get_uuid(&self, ir: &ir::IR) -> Uuid {
-        ir.modules[self.key].uuid
+        ir.get_module_data(self).uuid
     }
 
     pub fn get_name<'a>(&self, ir: &'a ir::IR) -> &'a str {
-        &ir.modules[self.key].name[..]
+        &ir.get_module_data(self).name[..]
     }
 
     pub fn add_section(&self, ir: &mut ir::IR) -> section::Section {
-        let key = ir.sections.len();
-        ir.sections.push(section::SectionData::new());
-        section::Section::new(key)
+        let sec = ir.add_section();
+        ir.get_module_data_mut(self).sections.push(sec);
+        sec
     }
 }

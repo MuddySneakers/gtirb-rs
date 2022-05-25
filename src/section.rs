@@ -7,6 +7,7 @@ impl SectionData {
     pub(crate) fn new() -> Self { Self {} }
 }
 
+#[derive(Clone, Copy)]
 pub struct Section {
     key: usize,
 }
