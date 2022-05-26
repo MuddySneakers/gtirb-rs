@@ -40,9 +40,17 @@ impl Module {
         &ir.get_module_data(self).name[..]
     }
 
-    pub fn add_section(&self, ir: &mut ir::IR) -> section::Section {
+    pub fn add_section(&mut self, ir: &mut ir::IR) -> section::Section {
         let sec = ir.add_section();
         ir.get_module_data_mut(self).sections.push(sec);
         sec
+    }
+
+    pub fn sections<'a>(&self, ir: &'a ir::IR) -> std::slice::Iter<'a, section::Section> {
+        ir.get_module_data(self).sections.iter()
+    }
+
+    pub fn sections_mut<'a>(&mut self, ir: &'a mut ir::IR) -> std::slice::IterMut<'a, section::Section> {
+        ir.get_module_data_mut(self).sections.iter_mut()
     }
 }

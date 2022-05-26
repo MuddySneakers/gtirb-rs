@@ -39,6 +39,14 @@ impl IR {
         self.modules[module.key].as_mut().expect("Attempt to access deleted Module!")
     }
 
+    pub(crate) fn get_section_data(&self, section: &section::Section) -> &section::SectionData {
+        self.sections[section.key].as_ref().expect("Attempt to access deleted Section!")
+    }
+
+    pub(crate) fn get_section_data_mut(&mut self, section: &section::Section) -> &mut section::SectionData {
+        self.sections[section.key].as_mut().expect("Attempt to access deleted Section!")
+    }
+
     pub(crate) fn get_byte_interval_data(&self, bi: &byte_interval::ByteInterval) -> &byte_interval::ByteIntervalData {
         self.byte_intervals[bi.key].as_ref().expect("Attempt to access deleted ByteInterval!")
     }

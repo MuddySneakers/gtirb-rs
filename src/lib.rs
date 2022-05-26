@@ -21,4 +21,14 @@ mod tests {
         let a_module = ir.add_module("foo.exe");
         assert_eq!(a_module.get_name(&ir), "foo.exe");
     }
+
+    fn test2() {
+        let mut ir = crate::ir::IR::new();
+        let mut a_module = ir.add_module("foo.exe");
+        let a_section = a_module.add_section(&mut ir);
+
+        for sec in a_module.sections_mut(&mut ir) {
+            sec.set_name(&mut ir, String::from("bar"));
+        }
+    }
 }
