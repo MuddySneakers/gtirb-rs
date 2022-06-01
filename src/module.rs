@@ -3,7 +3,7 @@ use anyhow::{anyhow, Result};
 use crate::*;
 
 #[derive(Debug, Default, PartialEq)]
-pub struct Module {
+pub struct ModuleData {
     pub(crate) parent: Option<Index>,
 
     uuid: Uuid,
@@ -20,9 +20,9 @@ pub struct Module {
     proxy_blocks: Vec<Index>,
 }
 
-impl Module {
+impl ModuleData {
     pub fn new(name: &str) -> Self {
-        Module {
+        Self {
             uuid: Uuid::new_v4(),
             name: name.to_owned(),
             ..Default::default()
@@ -44,22 +44,22 @@ impl Module {
         let sections = message
             .sections
             .into_iter()
-            .map(|m| Section::load_protobuf(context.clone(), m))
+            .map(|m| SectionData::load_protobuf(context.clone(), m))
             .collect::<Result<Vec<Index>>>()?;
 
         let symbols = message
             .symbols
             .into_iter()
-            .map(|m| Symbol::load_protobuf(context.clone(), m))
+            .map(|m| SymbolData::load_protobuf(context.clone(), m))
             .collect::<Result<Vec<Index>>>()?;
 
         let proxy_blocks = message
             .proxies
             .into_iter()
-            .map(|m| ProxyBlock::load_protobuf(context.clone(), m))
+            .map(|m| ProxyBlockData::load_protobuf(context.clone(), m))
             .collect::<Result<Vec<Index>>>()?;
 
-        let module = Module {
+        let module = Self {
             parent: None,
 
             uuid: crate::util::parse_uuid(&message.uuid)?,
@@ -80,23 +80,24 @@ impl Module {
     }
 }
 
-impl Unique for Module {
+impl NodeData<Module> for ModuleData {
     fn uuid(&self) -> Uuid {
         self.uuid
     }
-
-    fn set_uuid(&mut self, uuid: Uuid) {
-        self.uuid = uuid;
-    }
 }
 
-impl Node<Module> {
-    pub fn ir(&self) -> Node<IR> {
-        Node {
-            index: self.borrow().parent.expect("parent node"),
-            context: self.context.clone(),
-            kind: PhantomData,
-        }
+#[derive(Clone, Debug)]
+pub struct Module {
+    index: Index,
+    context: Rc<RefCell<Context>>,
+}
+
+impl Module {
+    pub fn ir(&self) -> IR {
+        IR::new(
+            self.borrow().parent.expect("parent node"),
+            self.context.clone(),
+        )
     }
 
     pub fn name(&self) -> String {
@@ -131,13 +132,13 @@ impl Node<Module> {
         self.borrow_mut().isa = isa;
     }
 
-    pub fn entry_point(&self) -> Option<Node<CodeBlock>> {
+    pub fn entry_point(&self) -> Option<CodeBlock> {
         self.borrow()
             .entry_point
             .and_then(|uuid| self.ir().find_node(uuid))
     }
 
-    pub fn set_entry_point(&self, block: Node<CodeBlock>) {
+    pub fn set_entry_point(&self, block: CodeBlock) {
         self.borrow_mut().entry_point.replace(block.uuid());
     }
 
@@ -169,39 +170,39 @@ impl Node<Module> {
         self.borrow().rebase_delta != 0
     }
 
-    pub fn sections(&self) -> NodeIterator<Section> {
+    pub fn sections(&self) -> NodeIterator<Section, SectionData> {
         self.node_iter()
     }
 
-    pub fn add_section(&self, section: Section) -> Node<Section> {
+    pub fn add_section(&self, section: SectionData) -> Section {
         self.add_node(section)
     }
 
-    pub fn remove_section(&self, node: Node<Section>) {
+    pub fn remove_section(&self, node: Section) {
         self.remove_node(node);
     }
 
-    pub fn proxy_blocks(&self) -> NodeIterator<ProxyBlock> {
+    pub fn proxy_blocks(&self) -> NodeIterator<ProxyBlock, ProxyBlockData> {
         self.node_iter()
     }
 
-    pub fn add_proxy_block(&self, proxy_block: ProxyBlock) -> Node<ProxyBlock> {
+    pub fn add_proxy_block(&self, proxy_block: ProxyBlockData) -> ProxyBlock {
         self.add_node(proxy_block)
     }
 
-    pub fn remove_proxy_block(&self, node: Node<ProxyBlock>) {
+    pub fn remove_proxy_block(&self, node: ProxyBlock) {
         self.remove_node(node);
     }
 
-    pub fn symbols(&self) -> NodeIterator<Symbol> {
+    pub fn symbols(&self) -> NodeIterator<Symbol, SymbolData> {
         self.node_iter()
     }
 
-    pub fn add_symbol(&self, symbol: Symbol) -> Node<Symbol> {
+    pub fn add_symbol(&self, symbol: SymbolData) -> Symbol {
         self.add_node(symbol)
     }
 
-    pub fn remove_symbol(&self, node: Node<Symbol>) {
+    pub fn remove_symbol(&self, node: Symbol) {
         self.remove_node(node);
     }
 
@@ -228,46 +229,57 @@ impl Node<Module> {
         self.sections().map(|s| s.address()).min().flatten()
     }
 
-    pub fn byte_intervals(&self) -> NodeIterator<ByteInterval> {
+    pub fn byte_intervals(
+        &self,
+    ) -> NodeIterator<ByteInterval, ByteIntervalData> {
         let iter = self.sections().flat_map(|interval| {
-            <Node<Section> as Parent<ByteInterval>>::nodes(&interval)
+            <Section as Parent<ByteInterval, ByteIntervalData>>::nodes(
+                &interval,
+            )
+            .clone()
+            .into_iter()
+        });
+        NodeIterator {
+            iter: Box::new(iter),
+            context: self.context.clone(),
+            kind: PhantomData,
+            kind_data: PhantomData,
+        }
+    }
+
+    pub fn code_blocks(&self) -> NodeIterator<CodeBlock, CodeBlockData> {
+        let iter = self.sections().flat_map(|section| {
+            section.byte_intervals().flat_map(|interval| {
+                <ByteInterval as Parent<CodeBlock, CodeBlockData>>::nodes(
+                    &interval,
+                )
                 .clone()
                 .into_iter()
-        });
-        NodeIterator {
-            iter: Box::new(iter),
-            context: self.context.clone(),
-            kind: PhantomData,
-        }
-    }
-
-    pub fn code_blocks(&self) -> NodeIterator<CodeBlock> {
-        let iter = self.sections().flat_map(|section| {
-            section.byte_intervals().flat_map(|interval| {
-                <Node<ByteInterval> as Parent<CodeBlock>>::nodes(&interval)
-                    .clone()
-                    .into_iter()
             })
         });
         NodeIterator {
             iter: Box::new(iter),
             context: self.context.clone(),
             kind: PhantomData,
+            kind_data: PhantomData,
         }
     }
 
-    pub fn data_blocks(&self) -> NodeIterator<DataBlock> {
+    pub fn data_blocks(&self) -> NodeIterator<DataBlock, DataBlockData> {
         let iter = self.sections().flat_map(|section| {
             section.byte_intervals().flat_map(|interval| {
-                <Node<ByteInterval> as Parent<DataBlock>>::nodes(&interval)
-                    .clone()
-                    .into_iter()
+                <ByteInterval as Parent<DataBlock, DataBlockData>>::nodes(
+                    &interval,
+                )
+                .clone()
+                .into_iter()
             })
         });
         NodeIterator {
             iter: Box::new(iter),
             context: self.context.clone(),
             kind: PhantomData,
+            kind_data: PhantomData,
         }
     }
 
@@ -275,17 +287,37 @@ impl Node<Module> {
     // get_symbol_reference<T>(symbol: Symbol) -> Node<T>
 }
 
-impl Indexed<Module> for Node<Module> {
-    fn arena(&self) -> Ref<Arena<Module>> {
+impl Node<Module, ModuleData> for Module {
+    fn new(index: Index, context: Rc<RefCell<Context>>) -> Self {
+        Self { index, context }
+    }
+
+    fn index(&self) -> Index {
+        self.index
+    }
+
+    fn context(&self) -> Rc<RefCell<Context>> {
+        self.context.clone()
+    }
+
+    fn uuid(&self) -> Uuid {
+        self.borrow().uuid
+    }
+
+    fn set_uuid(&mut self, uuid: Uuid) {
+        self.borrow_mut().uuid = uuid;
+    }
+
+    fn arena(&self) -> Ref<Arena<ModuleData>> {
         Ref::map(self.context.borrow(), |ctx| &ctx.module)
     }
 
-    fn arena_mut(&self) -> RefMut<Arena<Module>> {
+    fn arena_mut(&self) -> RefMut<Arena<ModuleData>> {
         RefMut::map(self.context.borrow_mut(), |ctx| &mut ctx.module)
     }
 }
 
-impl Child<IR> for Node<Module> {
+impl Child<IR, IRData> for Module {
     fn parent(&self) -> (Option<Index>, PhantomData<IR>) {
         (self.borrow().parent, PhantomData)
     }
@@ -295,56 +327,62 @@ impl Child<IR> for Node<Module> {
     }
 }
 
-impl Parent<Section> for Node<Module> {
+impl Parent<Section, SectionData> for Module {
     fn nodes(&self) -> Ref<Vec<Index>> {
-        Ref::map(self.borrow(), |module| &module.sections)
+        Ref::map(self.borrow(), |module: &ModuleData| &module.sections)
     }
 
     fn nodes_mut(&self) -> RefMut<Vec<Index>> {
-        RefMut::map(self.borrow_mut(), |module| &mut module.sections)
+        RefMut::map(self.borrow_mut(), |module: &mut ModuleData| {
+            &mut module.sections
+        })
     }
 
-    fn node_arena(&self) -> Ref<Arena<Section>> {
+    fn child_arena(&self) -> Ref<Arena<SectionData>> {
         Ref::map(self.context.borrow(), |ctx| &ctx.section)
     }
 
-    fn node_arena_mut(&self) -> RefMut<Arena<Section>> {
+    fn child_arena_mut(&self) -> RefMut<Arena<SectionData>> {
         RefMut::map(self.context.borrow_mut(), |ctx| &mut ctx.section)
     }
 }
 
-impl Parent<ProxyBlock> for Node<Module> {
+impl Parent<ProxyBlock, ProxyBlockData> for Module {
     fn nodes(&self) -> Ref<Vec<Index>> {
-        Ref::map(self.borrow(), |module| &module.proxy_blocks)
+        Ref::map(self.borrow(), |module: &ModuleData| &module.proxy_blocks)
     }
 
     fn nodes_mut(&self) -> RefMut<Vec<Index>> {
-        RefMut::map(self.borrow_mut(), |module| &mut module.proxy_blocks)
+        RefMut::map(self.borrow_mut(), |module: &mut ModuleData| {
+            &mut module.proxy_blocks
+        })
     }
 
-    fn node_arena(&self) -> Ref<Arena<ProxyBlock>> {
+    fn child_arena(&self) -> Ref<Arena<ProxyBlockData>> {
         Ref::map(self.context.borrow(), |ctx| &ctx.proxy_block)
     }
 
-    fn node_arena_mut(&self) -> RefMut<Arena<ProxyBlock>> {
+    fn child_arena_mut(&self) -> RefMut<Arena<ProxyBlockData>> {
         RefMut::map(self.context.borrow_mut(), |ctx| &mut ctx.proxy_block)
     }
 }
 
-impl Parent<Symbol> for Node<Module> {
+impl Parent<Symbol, SymbolData> for Module {
     fn nodes(&self) -> Ref<Vec<Index>> {
-        Ref::map(self.borrow(), |module| &module.symbols)
+        Ref::map(self.borrow(), |module: &ModuleData| &module.symbols)
     }
 
     fn nodes_mut(&self) -> RefMut<Vec<Index>> {
-        RefMut::map(self.borrow_mut(), |module| &mut module.symbols)
+        RefMut::map(self.borrow_mut(), |module: &mut ModuleData| {
+            &mut module.symbols
+        })
     }
 
-    fn node_arena(&self) -> Ref<Arena<Symbol>> {
+    fn child_arena(&self) -> Ref<Arena<SymbolData>> {
         Ref::map(self.context.borrow(), |ctx| &ctx.symbol)
     }
 
-    fn node_arena_mut(&self) -> RefMut<Arena<Symbol>> {
+    fn child_arena_mut(&self) -> RefMut<Arena<SymbolData>> {
         RefMut::map(self.context.borrow_mut(), |ctx| &mut ctx.symbol)
     }
 }
@@ -355,13 +393,13 @@ mod tests {
 
     #[test]
     fn new_module_is_unique() {
-        assert_ne!(Module::new("a"), Module::new("a"));
+        assert_ne!(ModuleData::new("a"), ModuleData::new("a"));
     }
 
     #[test]
     fn new_module_is_empty() {
-        let ir = IR::new();
-        let module = ir.add_module(Module::new("dummy"));
+        let ir = IRData::new();
+        let module = ir.add_module(ModuleData::new("dummy"));
 
         assert_eq!(module.symbols().count(), 0);
         assert_eq!(module.sections().count(), 0);
@@ -370,24 +408,24 @@ mod tests {
 
     #[test]
     fn can_set_binary_path() {
-        let ir = IR::new();
+        let ir = IRData::new();
         let path = "/home/gt/irb/foo";
-        let module = ir.add_module(Module::new("dummy"));
+        let module = ir.add_module(ModuleData::new("dummy"));
         module.set_binary_path(path);
         assert_eq!(module.binary_path(), path);
     }
 
     #[test]
     fn can_get_file_format_default() {
-        let ir = IR::new();
-        let module = ir.add_module(Module::new("dummy"));
+        let ir = IRData::new();
+        let module = ir.add_module(ModuleData::new("dummy"));
         assert_eq!(module.file_format(), FileFormat::FormatUndefined);
     }
 
     #[test]
     fn can_set_file_format() {
-        let ir = IR::new();
-        let module = ir.add_module(Module::new("dummy"));
+        let ir = IRData::new();
+        let module = ir.add_module(ModuleData::new("dummy"));
         module.set_file_format(FileFormat::Coff);
         assert_eq!(module.file_format(), FileFormat::Coff);
 
@@ -397,16 +435,16 @@ mod tests {
 
     #[test]
     fn can_set_name() {
-        let ir = IR::new();
-        let module = ir.add_module(Module::new("dummy"));
+        let ir = IRData::new();
+        let module = ir.add_module(ModuleData::new("dummy"));
         module.set_name("example");
         assert_eq!(module.name(), "example");
     }
 
     #[test]
     fn can_relocate_module() {
-        let ir = IR::new();
-        let module = ir.add_module(Module::new("dummy"));
+        let ir = IRData::new();
+        let module = ir.add_module(ModuleData::new("dummy"));
         assert!(!module.is_relocated());
         assert_eq!(module.rebase_delta(), 0);
 
@@ -417,30 +455,30 @@ mod tests {
 
     #[test]
     fn can_add_new_section() {
-        let ir = IR::new();
-        let module = Module::new("dummy");
+        let ir = IRData::new();
+        let module = ModuleData::new("dummy");
         let module = ir.add_module(module);
         assert_eq!(module.ir(), ir);
     }
 
     #[test]
     fn can_remove_section() {
-        let ir = IR::new();
-        let module = ir.add_module(Module::new("foo"));
-        let section = module.add_section(Section::new("bar"));
+        let ir = IRData::new();
+        let module = ir.add_module(ModuleData::new("foo"));
+        let section = module.add_section(SectionData::new("bar"));
         module.remove_section(section);
         assert_eq!(module.sections().count(), 0);
     }
 
     #[test]
     fn can_iterate_over_code_blocks() {
-        let ir = IR::new();
-        let module = ir.add_module(Module::new("dummy"));
-        let section = module.add_section(Section::new(".dummy"));
-        let b1 = section.add_byte_interval(ByteInterval::new());
-        let b2 = section.add_byte_interval(ByteInterval::new());
-        let cb1 = b1.add_code_block(CodeBlock::new());
-        let cb2 = b2.add_code_block(CodeBlock::new());
+        let ir = IRData::new();
+        let module = ir.add_module(ModuleData::new("dummy"));
+        let section = module.add_section(SectionData::new(".dummy"));
+        let b1 = section.add_byte_interval(ByteIntervalData::new());
+        let b2 = section.add_byte_interval(ByteIntervalData::new());
+        let cb1 = b1.add_code_block(CodeBlockData::new());
+        let cb2 = b2.add_code_block(CodeBlockData::new());
         assert_eq!(
             module
                 .code_blocks()
@@ -459,13 +497,13 @@ mod tests {
 
     #[test]
     fn can_calculate_size() {
-        let ir = IR::new();
-        let module = ir.add_module(Module::new("dummy"));
+        let ir = IRData::new();
+        let module = ir.add_module(ModuleData::new("dummy"));
         assert_eq!(module.size(), None);
         assert_eq!(module.address(), None);
 
-        let text = module.add_section(Section::new(".text"));
-        let bytes = text.add_byte_interval(ByteInterval::new());
+        let text = module.add_section(SectionData::new(".text"));
+        let bytes = text.add_byte_interval(ByteIntervalData::new());
         bytes.set_address(Some(Addr(200)));
         bytes.set_size(100);
 
@@ -476,8 +514,8 @@ mod tests {
         bytes.set_address(Some(Addr(0)));
         assert_eq!(module.address(), Some(Addr(0)));
 
-        let data = module.add_section(Section::new(".data"));
-        let bytes = data.add_byte_interval(ByteInterval::new());
+        let data = module.add_section(SectionData::new(".data"));
+        let bytes = data.add_byte_interval(ByteIntervalData::new());
         bytes.set_address(Some(Addr(300)));
         bytes.set_size(100);
         assert_eq!(module.size(), Some(400));

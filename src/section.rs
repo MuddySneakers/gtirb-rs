@@ -5,7 +5,7 @@ use anyhow::{anyhow, Result};
 use crate::*;
 
 #[derive(Default, Debug, PartialEq)]
-pub struct Section {
+pub struct SectionData {
     pub(crate) parent: Option<Index>,
 
     uuid: Uuid,
@@ -14,9 +14,9 @@ pub struct Section {
     byte_intervals: Vec<Index>,
 }
 
-impl Section {
+impl SectionData {
     pub fn new(name: &str) -> Self {
-        Section {
+        Self {
             uuid: Uuid::new_v4(),
             name: name.to_owned(),
             ..Default::default()
@@ -27,7 +27,6 @@ impl Section {
         context: Rc<RefCell<Context>>,
         message: proto::Section,
     ) -> Result<Index> {
-
         let section_flags: Result<HashSet<SectionFlag>> = message
             .section_flags
             .into_iter()
@@ -39,10 +38,10 @@ impl Section {
         let byte_intervals = message
             .byte_intervals
             .into_iter()
-            .map(|m| ByteInterval::load_protobuf(context.clone(), m))
+            .map(|m| ByteIntervalData::load_protobuf(context.clone(), m))
             .collect::<Result<Vec<Index>>>()?;
 
-        let section = Section {
+        let section = Self {
             parent: None,
 
             uuid: crate::util::parse_uuid(&message.uuid)?,
@@ -55,17 +54,19 @@ impl Section {
     }
 }
 
-impl Unique for Section {
+impl NodeData<Section> for SectionData {
     fn uuid(&self) -> Uuid {
         self.uuid
     }
-
-    fn set_uuid(&mut self, uuid: Uuid) {
-        self.uuid = uuid;
-    }
 }
 
-impl Node<Section> {
+#[derive(Clone, Debug)]
+pub struct Section {
+    index: Index,
+    context: Rc<RefCell<Context>>,
+}
+
+impl Section {
     pub fn name(&self) -> String {
         self.borrow().name.to_owned()
     }
@@ -109,24 +110,26 @@ impl Node<Section> {
         self.byte_intervals().map(|i| i.address()).min().flatten()
     }
 
-    pub fn byte_intervals(&self) -> NodeIterator<ByteInterval> {
+    pub fn byte_intervals(
+        &self,
+    ) -> NodeIterator<ByteInterval, ByteIntervalData> {
         self.node_iter()
     }
 
     pub fn add_byte_interval(
         &self,
-        byte_interval: ByteInterval,
-    ) -> Node<ByteInterval> {
+        byte_interval: ByteIntervalData,
+    ) -> ByteInterval {
         self.add_node(byte_interval)
     }
 
-    pub fn remove_byte_interval(&self, node: Node<ByteInterval>) {
+    pub fn remove_byte_interval(&self, node: ByteInterval) {
         self.remove_node(node);
     }
 
-    pub fn code_blocks(&self) -> NodeIterator<CodeBlock> {
+    pub fn code_blocks(&self) -> NodeIterator<CodeBlock, CodeBlockData> {
         let iter = self.byte_intervals().flat_map(|interval| {
-            <Node<ByteInterval> as Parent<CodeBlock>>::nodes(&interval)
+            <ByteInterval as Parent<CodeBlock, CodeBlockData>>::nodes(&interval)
                 .clone()
                 .into_iter()
         });
@@ -134,12 +137,13 @@ impl Node<Section> {
             iter: Box::new(iter),
             context: self.context.clone(),
             kind: PhantomData,
+            kind_data: PhantomData,
         }
     }
 
-    pub fn data_blocks(&self) -> NodeIterator<DataBlock> {
+    pub fn data_blocks(&self) -> NodeIterator<DataBlock, DataBlockData> {
         let iter = self.byte_intervals().flat_map(|interval| {
-            <Node<ByteInterval> as Parent<DataBlock>>::nodes(&interval)
+            <ByteInterval as Parent<DataBlock, DataBlockData>>::nodes(&interval)
                 .clone()
                 .into_iter()
         });
@@ -147,21 +151,42 @@ impl Node<Section> {
             iter: Box::new(iter),
             context: self.context.clone(),
             kind: PhantomData,
+            kind_data: PhantomData,
         }
     }
 }
 
-impl Indexed<Section> for Node<Section> {
-    fn arena(&self) -> Ref<Arena<Section>> {
+impl Node<Section, SectionData> for Section {
+    fn new(index: Index, context: Rc<RefCell<Context>>) -> Self {
+        Self { index, context }
+    }
+
+    fn index(&self) -> Index {
+        self.index
+    }
+
+    fn context(&self) -> Rc<RefCell<Context>> {
+        self.context.clone()
+    }
+
+    fn uuid(&self) -> Uuid {
+        self.borrow().uuid
+    }
+
+    fn set_uuid(&mut self, uuid: Uuid) {
+        self.borrow_mut().uuid = uuid;
+    }
+
+    fn arena(&self) -> Ref<Arena<SectionData>> {
         Ref::map(self.context.borrow(), |ctx| &ctx.section)
     }
 
-    fn arena_mut(&self) -> RefMut<Arena<Section>> {
+    fn arena_mut(&self) -> RefMut<Arena<SectionData>> {
         RefMut::map(self.context.borrow_mut(), |ctx| &mut ctx.section)
     }
 }
 
-impl Child<Module> for Node<Section> {
+impl Child<Module, ModuleData> for Section {
     fn parent(&self) -> (Option<Index>, PhantomData<Module>) {
         (self.borrow().parent, PhantomData)
     }
@@ -171,7 +196,7 @@ impl Child<Module> for Node<Section> {
     }
 }
 
-impl Parent<ByteInterval> for Node<Section> {
+impl Parent<ByteInterval, ByteIntervalData> for Section {
     fn nodes(&self) -> Ref<Vec<Index>> {
         Ref::map(self.borrow(), |section| &section.byte_intervals)
     }
@@ -180,10 +205,10 @@ impl Parent<ByteInterval> for Node<Section> {
         RefMut::map(self.borrow_mut(), |section| &mut section.byte_intervals)
     }
 
-    fn node_arena(&self) -> Ref<Arena<ByteInterval>> {
+    fn child_arena(&self) -> Ref<Arena<ByteIntervalData>> {
         Ref::map(self.context.borrow(), |ctx| &ctx.byte_interval)
     }
-    fn node_arena_mut(&self) -> RefMut<Arena<ByteInterval>> {
+    fn child_arena_mut(&self) -> RefMut<Arena<ByteIntervalData>> {
         RefMut::map(self.context.borrow_mut(), |ctx| &mut ctx.byte_interval)
     }
 }
@@ -194,9 +219,9 @@ mod tests {
 
     #[test]
     fn can_set_attributes() {
-        let ir = IR::new();
-        let module = ir.add_module(Module::new("dummy"));
-        let section = module.add_section(Section::new(".text"));
+        let ir = IRData::new();
+        let module = ir.add_module(ModuleData::new("dummy"));
+        let section = module.add_section(SectionData::new(".text"));
         assert_eq!(section.name(), ".text");
 
         section.set_name(".data");
@@ -205,9 +230,9 @@ mod tests {
 
     #[test]
     fn can_set_flags() {
-        let ir = IR::new();
-        let module = ir.add_module(Module::new("dummy"));
-        let section = module.add_section(Section::new(".text"));
+        let ir = IRData::new();
+        let module = ir.add_module(ModuleData::new("dummy"));
+        let section = module.add_section(SectionData::new(".text"));
         assert_eq!(section.name(), ".text");
 
         assert!(section.flags().is_empty());
@@ -222,26 +247,26 @@ mod tests {
 
     #[test]
     fn can_calculate_size() {
-        let ir = IR::new();
-        let module = ir.add_module(Module::new("dummy"));
+        let ir = IRData::new();
+        let module = ir.add_module(ModuleData::new("dummy"));
 
-        let section = module.add_section(Section::new(".text"));
+        let section = module.add_section(SectionData::new(".text"));
         assert_eq!(section.size(), None);
         assert_eq!(section.address(), None);
 
-        let byte_interval = section.add_byte_interval(ByteInterval::new());
+        let byte_interval = section.add_byte_interval(ByteIntervalData::new());
         byte_interval.set_address(Some(Addr(5)));
         byte_interval.set_size(10);
         assert_eq!(section.size(), Some(10));
         assert_eq!(section.address(), Some(Addr(5)));
 
-        let byte_interval = section.add_byte_interval(ByteInterval::new());
+        let byte_interval = section.add_byte_interval(ByteIntervalData::new());
         byte_interval.set_address(Some(Addr(15)));
         byte_interval.set_size(10);
         assert_eq!(section.size(), Some(20));
         assert_eq!(section.address(), Some(Addr(5)));
 
-        section.add_byte_interval(ByteInterval::new());
+        section.add_byte_interval(ByteIntervalData::new());
         assert_eq!(section.size(), None);
         assert_eq!(section.address(), None);
     }

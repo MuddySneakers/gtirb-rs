@@ -3,13 +3,13 @@ use anyhow::Result;
 use crate::*;
 
 #[derive(Default, Debug, PartialEq)]
-pub struct ProxyBlock {
+pub struct ProxyBlockData {
     pub(crate) parent: Option<Index>,
 
     uuid: Uuid,
 }
 
-impl ProxyBlock {
+impl ProxyBlockData {
     pub fn new() -> Self {
         Self {
             uuid: Uuid::new_v4(),
@@ -20,7 +20,7 @@ impl ProxyBlock {
         context: Rc<RefCell<Context>>,
         message: proto::ProxyBlock,
     ) -> Result<Index> {
-        let proxy_block = ProxyBlock {
+        let proxy_block = Self {
             parent: None,
             uuid: crate::util::parse_uuid(&message.uuid)?,
         };
@@ -28,29 +28,51 @@ impl ProxyBlock {
     }
 }
 
-impl Unique for ProxyBlock {
+impl NodeData<ProxyBlock> for ProxyBlockData {
     fn uuid(&self) -> Uuid {
         self.uuid
     }
-
-    fn set_uuid(&mut self, uuid: Uuid) {
-        self.uuid = uuid;
-    }
 }
 
-impl Node<ProxyBlock> {}
+#[derive(Clone, Debug)]
+pub struct ProxyBlock {
+    index: Index,
+    context: Rc<RefCell<Context>>,
+}
 
-impl Indexed<ProxyBlock> for Node<ProxyBlock> {
-    fn arena(&self) -> Ref<Arena<ProxyBlock>> {
+impl ProxyBlock {}
+
+impl Node<ProxyBlock, ProxyBlockData> for ProxyBlock {
+    fn new(index: Index, context: Rc<RefCell<Context>>) -> Self {
+        Self { index, context }
+    }
+
+    fn index(&self) -> Index {
+        self.index
+    }
+
+    fn context(&self) -> Rc<RefCell<Context>> {
+        self.context.clone()
+    }
+
+    fn uuid(&self) -> Uuid {
+        self.borrow().uuid
+    }
+
+    fn set_uuid(&mut self, uuid: Uuid) {
+        self.borrow_mut().uuid = uuid;
+    }
+
+    fn arena(&self) -> Ref<Arena<ProxyBlockData>> {
         Ref::map(self.context.borrow(), |ctx| &ctx.proxy_block)
     }
 
-    fn arena_mut(&self) -> RefMut<Arena<ProxyBlock>> {
+    fn arena_mut(&self) -> RefMut<Arena<ProxyBlockData>> {
         RefMut::map(self.context.borrow_mut(), |ctx| &mut ctx.proxy_block)
     }
 }
 
-impl Child<Module> for Node<ProxyBlock> {
+impl Child<Module, ModuleData> for ProxyBlock {
     fn parent(&self) -> (Option<Index>, PhantomData<Module>) {
         (self.borrow().parent, PhantomData)
     }

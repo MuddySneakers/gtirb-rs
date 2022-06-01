@@ -19,201 +19,168 @@ use addr::*;
 
 mod ir;
 pub use ir::read;
-use ir::IR;
+use ir::{IRData, IR};
 
 mod module;
-use module::Module;
+use module::{Module, ModuleData};
 
 mod section;
-use section::Section;
+use section::{Section, SectionData};
 
 mod byte_interval;
-use byte_interval::ByteInterval;
+use byte_interval::{ByteInterval, ByteIntervalData};
 
 mod code_block;
-use code_block::CodeBlock;
+use code_block::{CodeBlock, CodeBlockData};
 
 mod data_block;
-use data_block::DataBlock;
+use data_block::{DataBlock, DataBlockData};
 
 mod proxy_block;
-use proxy_block::ProxyBlock;
+use proxy_block::{ProxyBlock, ProxyBlockData};
 
 mod symbol;
-use symbol::Symbol;
+use symbol::{Symbol, SymbolData};
 
 mod symbolic_expression;
 use symbolic_expression::SymbolicExpression;
 
 mod util;
 
-#[derive(Clone, Debug)]
-pub struct Node<T> {
-    index: Index,
-    context: Rc<RefCell<Context>>,
-    kind: PhantomData<T>,
+pub trait NodeData<T> {
+    fn uuid(&self) -> Uuid;
 }
 
-pub struct NodeIterator<T> {
-    iter: Box<dyn Iterator<Item = Index>>,
-    context: Rc<RefCell<Context>>,
-    kind: PhantomData<T>,
-}
+pub trait Node<T: Node<T, TData>, TData: NodeData<T>> {
+    fn new(idx: Index, ctx: Rc<RefCell<Context>>) -> Self;
+    fn index(&self) -> Index;
+    fn context(&self) -> Rc<RefCell<Context>>;
+    fn arena(&self) -> Ref<Arena<TData>>;
+    fn arena_mut(&self) -> RefMut<Arena<TData>>;
+    fn uuid(&self) -> Uuid;
+    fn set_uuid(&mut self, uuid: Uuid);
 
-impl<T> Iterator for NodeIterator<T> {
-    type Item = Node<T>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let item = self.iter.next();
-        item.map(|index| Node {
-            index,
-            context: self.context.clone(),
-            kind: PhantomData,
-        })
-    }
-}
-
-pub trait Child<T> {
-    fn parent(&self) -> (Option<Index>, PhantomData<T>);
-    fn set_parent(&self, index: (Index, PhantomData<T>));
-}
-
-pub trait Parent<T> {
-    fn nodes(&self) -> Ref<Vec<Index>>;
-    fn nodes_mut(&self) -> RefMut<Vec<Index>>;
-
-    fn node_arena(&self) -> Ref<Arena<T>>;
-    fn node_arena_mut(&self) -> RefMut<Arena<T>>;
-}
-
-impl<T> Node<T>
-where
-    Node<T>: Indexed<T>,
-{
-    pub fn node_iter<U>(&self) -> NodeIterator<U>
+    fn node_iter<U, UData>(&self) -> NodeIterator<U, UData>
     where
-        Node<U>: Child<T>,
-        Node<T>: Parent<U>,
+        U: Child<T, TData> + Node<U, UData>,
+        UData: NodeData<U>,
+        Self: Parent<U, UData>,
     {
         NodeIterator {
             iter: Box::new(self.nodes().clone().into_iter()),
-            context: self.context.clone(),
+            context: self.context().clone(),
             kind: PhantomData,
+            kind_data: PhantomData,
         }
     }
 
-    pub fn add_node<U: Unique>(&self, node: U) -> Node<U>
+    fn add_node<U, UData>(&self, node_data: UData) -> U
     where
-        Node<U>: Child<T>,
-        Node<T>: Parent<U>,
+        U: Child<T, TData> + Node<U, UData>,
+        UData: NodeData<U>,
+        Self: Parent<U, UData>,
     {
         // Add node to Context.
-        let uuid = node.uuid();
-        let index = self.node_arena_mut().insert(node);
-        self.context.borrow_mut().uuid_map.insert(uuid, index);
+        let uuid = node_data.uuid();
+        let index = self.child_arena_mut().insert(node_data);
+        self.context().borrow_mut().uuid_map.insert(uuid, index);
 
         // Add node to Parent.
         self.nodes_mut().push(index);
 
-        let node = Node {
-            index,
-            context: self.context.clone(),
-            kind: PhantomData,
-        };
+        let node = U::new(index, self.context().clone());
 
         // Update parent
-        node.set_parent((self.index, PhantomData));
+        node.set_parent((self.index(), PhantomData));
         node
     }
 
-    pub fn remove_node<U: Unique>(&self, node: Node<U>)
+    fn remove_node<U, UData>(&self, node: U)
     where
-        Node<T>: Parent<U>,
-        Node<U>: Child<T>,
-        Node<U>: Indexed<U>,
+        Self: Parent<U, UData>,
+        U: Child<T, TData> + Node<U, UData>,
+        UData: NodeData<U>,
     {
         // Consume node.
-        let (index, uuid) = { (node.index, node.uuid()) };
+        let (index, uuid) = { (node.index(), node.uuid()) };
 
         // Remove Child from Parent.
-        self.node_arena_mut().remove(node.index);
         let position = self.nodes().iter().position(|i| *i == index).unwrap();
         self.nodes_mut().remove(position);
 
         // Remove Child from Context.
-        self.node_arena_mut().remove(index);
-        self.context.borrow_mut().uuid_map.remove(&uuid);
-    }
-}
-
-pub trait Indexed<T> {
-    fn arena(&self) -> Ref<Arena<T>>;
-    fn arena_mut(&self) -> RefMut<Arena<T>>;
-}
-
-impl<T> Node<T>
-where
-    Node<T>: Indexed<T>,
-{
-    fn borrow(&self) -> Ref<T> {
-        Ref::map(self.arena(), |a| a.get(self.index).expect("indexed node"))
+        self.child_arena_mut().remove(index);
+        self.context().borrow_mut().uuid_map.remove(&uuid);
     }
 
-    fn borrow_mut(&self) -> RefMut<T> {
+    fn borrow(&self) -> Ref<TData> {
+        Ref::map(self.arena(), |a| a.get(self.index()).expect("indexed node"))
+    }
+
+    fn borrow_mut(&self) -> RefMut<TData> {
         RefMut::map(self.arena_mut(), |a| {
-            a.get_mut(self.index).expect("indexed node")
+            a.get_mut(self.index()).expect("indexed node")
         })
     }
 }
 
-pub trait Unique {
-    fn uuid(&self) -> Uuid;
-    fn set_uuid(&mut self, uuid: Uuid);
+pub struct NodeIterator<T, TData>
+where
+    T: Node<T, TData>,
+    TData: NodeData<T>,
+{
+    iter: Box<dyn Iterator<Item = Index>>,
+    context: Rc<RefCell<Context>>,
+    kind: PhantomData<T>,
+    kind_data: PhantomData<TData>,
 }
 
-impl<T> Node<T>
+impl<T, TData> Iterator for NodeIterator<T, TData>
 where
-    Node<T>: Indexed<T>,
-    T: Unique,
+    T: Node<T, TData>,
+    TData: NodeData<T>,
 {
-    pub fn uuid(&self) -> Uuid {
-        self.borrow().uuid()
-    }
+    type Item = T;
 
-    pub fn set_uuid(&self, uuid: Uuid) {
-        let mut context = self.context.borrow_mut();
-        let mut node = self.borrow_mut();
-        context.uuid_map.remove(&node.uuid());
-        context.uuid_map.insert(uuid, self.index);
-        node.set_uuid(uuid);
+    fn next(&mut self) -> Option<Self::Item> {
+        let item = self.iter.next();
+        item.map(|index| T::new(index, self.context.clone()))
     }
 }
 
-impl<T> PartialEq for Node<T>
+pub trait Child<T, TData>
 where
-    Node<T>: Indexed<T>,
-    T: PartialEq,
+    T: Node<T, TData>,
+    TData: NodeData<T>,
 {
-    fn eq(&self, other: &Self) -> bool {
-        match (self.arena().get(self.index), other.arena().get(other.index)) {
-            (Some(a), Some(b)) => *a == *b,
-            _ => false,
-        }
-    }
+    fn parent(&self) -> (Option<Index>, PhantomData<T>);
+    fn set_parent(&self, index: (Index, PhantomData<T>));
+}
+
+pub trait Parent<T, TData>
+where
+    T: Node<T, TData>,
+    TData: NodeData<T>,
+{
+    fn nodes(&self) -> Ref<Vec<Index>>;
+    fn nodes_mut(&self) -> RefMut<Vec<Index>>;
+
+    fn child_arena(&self) -> Ref<Arena<TData>>;
+    fn child_arena_mut(&self) -> RefMut<Arena<TData>>;
 }
 
 #[derive(Debug, Default)]
-struct Context {
+pub struct Context {
     uuid_map: HashMap<Uuid, Index>,
 
-    ir: Arena<IR>,
-    module: Arena<Module>,
-    section: Arena<Section>,
-    byte_interval: Arena<ByteInterval>,
-    code_block: Arena<CodeBlock>,
-    data_block: Arena<DataBlock>,
-    proxy_block: Arena<ProxyBlock>,
-    symbol: Arena<Symbol>,
+    ir: Arena<IRData>,
+    module: Arena<ModuleData>,
+    section: Arena<SectionData>,
+    byte_interval: Arena<ByteIntervalData>,
+    code_block: Arena<CodeBlockData>,
+    data_block: Arena<DataBlockData>,
+    proxy_block: Arena<ProxyBlockData>,
+    symbol: Arena<SymbolData>,
 }
 
 impl Context {

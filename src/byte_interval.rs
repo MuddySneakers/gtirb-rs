@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use crate::*;
 
 #[derive(Default, Debug, PartialEq)]
-pub struct ByteInterval {
+pub struct ByteIntervalData {
     pub(crate) parent: Option<Index>,
 
     uuid: Uuid,
@@ -17,7 +17,7 @@ pub struct ByteInterval {
     symbolic_expressions: HashMap<u64, SymbolicExpression>,
 }
 
-impl ByteInterval {
+impl ByteIntervalData {
     pub fn new() -> Self {
         Self {
             uuid: Uuid::new_v4(),
@@ -29,28 +29,27 @@ impl ByteInterval {
         context: Rc<RefCell<Context>>,
         message: proto::ByteInterval,
     ) -> Result<Index> {
-
         // let code_blocks = message
         //     .code_blocks
         //     .into_iter()
-        //     .map(|m| CodeBlock::load_protobuf(context.clone(), m))
+        //     .map(|m| CodeBlockData::load_protobuf(context.clone(), m))
         //     .collect::<Result<Vec<Index>>>()?;
 
         // let data_blocks = message
         //     .data_blocks
         //     .into_iter()
-        //     .map(|m| CodeBlock::load_protobuf(context.clone(), m))
+        //     .map(|m| DataBlockData::load_protobuf(context.clone(), m))
         //     .collect::<Result<Vec<Index>>>()?;
 
-        let byte_interval = ByteInterval {
+        let byte_interval = Self {
             parent: None,
 
             uuid: crate::util::parse_uuid(&message.uuid)?,
             size: message.size,
             address: message.has_address.then(|| Addr(message.address)),
             bytes: message.contents,
-            code_blocks: Vec::new(), // TODO
-            data_blocks: Vec::new(), // TODO
+            code_blocks: Vec::new(),              // TODO
+            data_blocks: Vec::new(),              // TODO
             symbolic_expressions: HashMap::new(), // TODO
         };
 
@@ -58,17 +57,19 @@ impl ByteInterval {
     }
 }
 
-impl Unique for ByteInterval {
+impl NodeData<ByteInterval> for ByteIntervalData {
     fn uuid(&self) -> Uuid {
         self.uuid
     }
-
-    fn set_uuid(&mut self, uuid: Uuid) {
-        self.uuid = uuid;
-    }
 }
 
-impl Node<ByteInterval> {
+#[derive(Clone, Debug)]
+pub struct ByteInterval {
+    index: Index,
+    context: Rc<RefCell<Context>>,
+}
+
+impl ByteInterval {
     pub fn size(&self) -> u64 {
         return self.borrow().size;
     }
@@ -97,49 +98,69 @@ impl Node<ByteInterval> {
     }
 
     pub fn bytes(&self) -> Ref<[u8]> {
-        Ref::map(self.borrow(), |i| &i.bytes[..])
+        Ref::map(self.borrow(), |i: &ByteIntervalData| &i.bytes[..])
     }
 
     pub fn set_bytes<T: AsRef<[u8]>>(&self, bytes: T) {
         self.borrow_mut().bytes = bytes.as_ref().to_vec();
     }
 
-    pub fn code_blocks(&self) -> NodeIterator<CodeBlock> {
+    pub fn code_blocks(&self) -> NodeIterator<CodeBlock, CodeBlockData> {
         self.node_iter()
     }
 
-    pub fn add_code_block(&self, code_block: CodeBlock) -> Node<CodeBlock> {
+    pub fn add_code_block(&self, code_block: CodeBlockData) -> CodeBlock {
         self.add_node(code_block)
     }
 
-    pub fn remove_code_block(&self, node: Node<CodeBlock>) {
+    pub fn remove_code_block(&self, node: CodeBlock) {
         self.remove_node(node);
     }
 
-    pub fn data_blocks(&self) -> NodeIterator<DataBlock> {
+    pub fn data_blocks(&self) -> NodeIterator<DataBlock, DataBlockData> {
         self.node_iter()
     }
 
-    pub fn add_data_block(&self, data_block: DataBlock) -> Node<DataBlock> {
+    pub fn add_data_block(&self, data_block: DataBlockData) -> DataBlock {
         self.add_node(data_block)
     }
 
-    pub fn remove_data_block(&self, node: Node<DataBlock>) {
+    pub fn remove_data_block(&self, node: DataBlock) {
         self.remove_node(node);
     }
 }
 
-impl Indexed<ByteInterval> for Node<ByteInterval> {
-    fn arena(&self) -> Ref<Arena<ByteInterval>> {
+impl Node<ByteInterval, ByteIntervalData> for ByteInterval {
+    fn new(index: Index, context: Rc<RefCell<Context>>) -> Self {
+        Self { index, context }
+    }
+
+    fn index(&self) -> Index {
+        self.index
+    }
+
+    fn context(&self) -> Rc<RefCell<Context>> {
+        self.context.clone()
+    }
+
+    fn uuid(&self) -> Uuid {
+        self.borrow().uuid
+    }
+
+    fn set_uuid(&mut self, uuid: Uuid) {
+        self.borrow_mut().uuid = uuid;
+    }
+
+    fn arena(&self) -> Ref<Arena<ByteIntervalData>> {
         Ref::map(self.context.borrow(), |ctx| &ctx.byte_interval)
     }
 
-    fn arena_mut(&self) -> RefMut<Arena<ByteInterval>> {
+    fn arena_mut(&self) -> RefMut<Arena<ByteIntervalData>> {
         RefMut::map(self.context.borrow_mut(), |ctx| &mut ctx.byte_interval)
     }
 }
 
-impl Child<Section> for Node<ByteInterval> {
+impl Child<Section, SectionData> for ByteInterval {
     fn parent(&self) -> (Option<Index>, PhantomData<Section>) {
         (self.borrow().parent, PhantomData)
     }
@@ -149,7 +170,7 @@ impl Child<Section> for Node<ByteInterval> {
     }
 }
 
-impl Parent<CodeBlock> for Node<ByteInterval> {
+impl Parent<CodeBlock, CodeBlockData> for ByteInterval {
     fn nodes(&self) -> Ref<Vec<Index>> {
         Ref::map(self.borrow(), |interval| &interval.code_blocks)
     }
@@ -158,16 +179,16 @@ impl Parent<CodeBlock> for Node<ByteInterval> {
         RefMut::map(self.borrow_mut(), |interval| &mut interval.code_blocks)
     }
 
-    fn node_arena(&self) -> Ref<Arena<CodeBlock>> {
+    fn child_arena(&self) -> Ref<Arena<CodeBlockData>> {
         Ref::map(self.context.borrow(), |ctx| &ctx.code_block)
     }
 
-    fn node_arena_mut(&self) -> RefMut<Arena<CodeBlock>> {
+    fn child_arena_mut(&self) -> RefMut<Arena<CodeBlockData>> {
         RefMut::map(self.context.borrow_mut(), |ctx| &mut ctx.code_block)
     }
 }
 
-impl Parent<DataBlock> for Node<ByteInterval> {
+impl Parent<DataBlock, DataBlockData> for ByteInterval {
     fn nodes(&self) -> Ref<Vec<Index>> {
         Ref::map(self.borrow(), |interval| &interval.data_blocks)
     }
@@ -176,11 +197,11 @@ impl Parent<DataBlock> for Node<ByteInterval> {
         RefMut::map(self.borrow_mut(), |interval| &mut interval.data_blocks)
     }
 
-    fn node_arena(&self) -> Ref<Arena<DataBlock>> {
+    fn child_arena(&self) -> Ref<Arena<DataBlockData>> {
         Ref::map(self.context.borrow(), |ctx| &ctx.data_block)
     }
 
-    fn node_arena_mut(&self) -> RefMut<Arena<DataBlock>> {
+    fn child_arena_mut(&self) -> RefMut<Arena<DataBlockData>> {
         RefMut::map(self.context.borrow_mut(), |ctx| &mut ctx.data_block)
     }
 }
@@ -191,10 +212,10 @@ mod tests {
 
     #[test]
     fn can_set_attributes() {
-        let ir = IR::new();
-        let module = ir.add_module(Module::new("dummy"));
-        let section = module.add_section(Section::new(".dummy"));
-        let interval = section.add_byte_interval(ByteInterval::new());
+        let ir = IRData::new();
+        let module = ir.add_module(ModuleData::new("dummy"));
+        let section = module.add_section(SectionData::new(".dummy"));
+        let interval = section.add_byte_interval(ByteIntervalData::new());
         interval.set_size(0xDEAD);
         interval.set_address(Some(Addr(0xBEEF)));
         assert_eq!(interval.size(), 0xDEAD);

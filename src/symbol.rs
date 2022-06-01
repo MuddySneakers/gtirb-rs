@@ -2,14 +2,14 @@ use anyhow::Result;
 
 use crate::*;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
 pub enum Payload {
     Value(Addr),
     Referent(Uuid),
 }
 
-#[derive(Debug, Default, PartialEq)]
-pub struct Symbol {
+#[derive(Debug, Default)]
+pub struct SymbolData {
     pub(crate) parent: Option<Index>,
 
     uuid: Uuid,
@@ -17,9 +17,9 @@ pub struct Symbol {
     payload: Option<Payload>,
 }
 
-impl Symbol {
+impl SymbolData {
     pub fn new(name: &str) -> Self {
-        Symbol {
+        Self {
             uuid: Uuid::new_v4(),
             name: name.to_owned(),
             ..Default::default()
@@ -40,7 +40,7 @@ impl Symbol {
             None => None,
         };
 
-        let symbol = Symbol {
+        let symbol = Self {
             parent: None,
 
             uuid: crate::util::parse_uuid(&message.uuid)?,
@@ -52,29 +52,51 @@ impl Symbol {
     }
 }
 
-impl Unique for Symbol {
+impl NodeData<Symbol> for SymbolData {
     fn uuid(&self) -> Uuid {
         self.uuid
     }
-
-    fn set_uuid(&mut self, uuid: Uuid) {
-        self.uuid = uuid;
-    }
 }
 
-impl Node<Symbol> {}
+#[derive(Clone, Debug)]
+pub struct Symbol {
+    index: Index,
+    context: Rc<RefCell<Context>>,
+}
 
-impl Indexed<Symbol> for Node<Symbol> {
-    fn arena(&self) -> Ref<Arena<Symbol>> {
+impl Symbol {}
+
+impl Node<Symbol, SymbolData> for Symbol {
+    fn new(index: Index, context: Rc<RefCell<Context>>) -> Self {
+        Self { index, context }
+    }
+
+    fn index(&self) -> Index {
+        self.index
+    }
+
+    fn context(&self) -> Rc<RefCell<Context>> {
+        self.context.clone()
+    }
+
+    fn uuid(&self) -> Uuid {
+        self.borrow().uuid
+    }
+
+    fn set_uuid(&mut self, uuid: Uuid) {
+        self.borrow_mut().uuid = uuid;
+    }
+
+    fn arena(&self) -> Ref<Arena<SymbolData>> {
         Ref::map(self.context.borrow(), |ctx| &ctx.symbol)
     }
 
-    fn arena_mut(&self) -> RefMut<Arena<Symbol>> {
+    fn arena_mut(&self) -> RefMut<Arena<SymbolData>> {
         RefMut::map(self.context.borrow_mut(), |ctx| &mut ctx.symbol)
     }
 }
 
-impl Child<Module> for Node<Symbol> {
+impl Child<Module, ModuleData> for Symbol {
     fn parent(&self) -> (Option<Index>, PhantomData<Module>) {
         (self.borrow().parent, PhantomData)
     }
